@@ -17,6 +17,7 @@ O projeto: um sistema de tickets de suporte com 3 papéis (cliente, agente, admi
 - [x] **Fase 8** — Testes automatizados
 - [x] **Fase 9** — Containerização com Docker (deploy em nuvem fica para uma fase futura, por decisão deliberada — ver seção da Fase 9)
 - [x] **Fase 10** — Tags e histórico de atividade (o projeto já publicado, evoluído com uma melhoria concreta)
+- [x] **Fase 11** — Rate limiting no login/registro
 
 Cada fase abaixo detalha as decisões da fase já feita.
 
@@ -386,6 +387,32 @@ Até a Fase 10, `metadata: { agentId }` bastava, porque nada exibia essa informa
 
 ### Para que serve
 Isso fecha um "loose end" que só quem olhasse o schema do banco com atenção notaria — e é exatamente esse tipo de acabamento que separa um projeto de portfólio "funcional" de um "completo". Tags dão contexto de triagem que a listagem sozinha não dava; a timeline responde, para qualquer pessoa olhando um ticket, "o que já aconteceu aqui" sem precisar perguntar a ninguém.
+
+---
+
+## Fase 11 — Rate limiting no login/registro
+
+### O que foi feito
+`backend/src/middleware/rateLimit.ts` exporta `createAuthLimiter(overrides)`, uma fábrica em cima de `express-rate-limit`. Uma instância dela é aplicada em `POST /api/auth/register` e `POST /api/auth/login` (compartilhada entre as duas rotas): no máximo 10 requisições a cada 15 minutos, por IP. Acima disso, `429` com `{ error: "Muitas tentativas. Tente novamente em alguns minutos." }`.
+
+### Por que era o buraco de segurança mais óbvio que faltava
+O projeto já vinha de uma linha consistente de decisões de segurança — senha com hash (`bcrypt`, Fase 2), mensagem de erro idêntica para "senha errada" e "email inexistente" (proteção contra enumeração, também Fase 2), autorização por objeto contra BOLA (Fase 4). Mas nada impedia alguém de tentar milhares de senhas por segundo contra `/login`, ou criar milhares de contas em `/register` num script. Rate limiting por IP é a defesa mínima padrão da indústria contra os dois.
+
+### Por que é uma FÁBRICA (`createAuthLimiter(...)`), não uma instância única exportada
+Isso existe para resolver um problema real de teste, não por preferência arquitetural abstrata: o `max: 10` de produção é baixo demais para a suíte de integração, que intencionalmente faz múltiplas chamadas a `/register`/`/login` na mesma janela de 15 minutos (é assim que ela testa "email duplicado", "senha errada", etc. — ver Fase 8). Duas soluções óbvias existiam:
+1. Aumentar o `max` até caber todos os testes — mas isso acopla o valor de produção ao número de chamadas que a suíte de teste faz hoje, e quebraria de novo assim que alguém adicionasse mais um teste.
+2. Desativar o limitador inteiro durante os testes, e nunca provar que ele realmente bloqueia.
+
+Em vez disso, a fábrica permite duas coisas ao mesmo tempo: `auth.routes.ts` usa `skip: () => process.env.NODE_ENV === "test"` (o Vitest já define `NODE_ENV=test` sozinho — confirmado rodando um teste que só imprime essa variável) para não interferir na suíde de integração; e `middleware/rateLimit.test.ts` cria sua PRÓPRIA instância, com `max: 3` e sem `skip`, montada num Express descartável de algumas linhas — provando o bloqueio de verdade (3 requisições passam, a 4ª volta `429`) sem precisar de Postgres nem de reaproveitar as rotas reais.
+
+### Por que o limitador é compartilhado entre `/register` e `/login`, não um por rota
+Um atacante martelando `/login` para adivinhar senha e um atacante martelando `/register` para criar contas em massa são o mesmo tipo de abuso vindo do mesmo IP — não faz sentido dar a cada rota seu próprio orçamento de 10 tentativas quando o objetivo é limitar quanto uma única origem pode fazer, período.
+
+### Confirmado contra o servidor de verdade (fora do modo de teste)
+Rodando 12 tentativas de login seguidas com credenciais inválidas contra o backend real (não a suíte de teste): as 10 primeiras voltaram `401` (esperado — credenciais erradas), a 11ª e a 12ª voltaram `429`. O comportamento é real, não só teórico.
+
+### Limitação conhecida (documentada de propósito, não escondida)
+O contador fica em memória do próprio processo Node (`express-rate-limit` usa uma `MemoryStore` por padrão). Isso é perfeito para uma instância única — exatamente o que este projeto roda — mas não escalaria para múltiplas réplicas do backend atrás de um load balancer: cada réplica teria sua própria contagem independente, e um atacante distribuindo requisições entre elas efetivamente multiplicaria o limite pelo número de réplicas. A correção nesse cenário é trocar a store por uma compartilhada (ex: `rate-limit-redis`), mantendo a mesma API — é uma troca de uma linha (`new RedisStore(...)` no lugar do padrão), não uma reescrita, mas fica fora do escopo deste projeto por ora.
 
 ---
 
