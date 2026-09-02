@@ -1,0 +1,77 @@
+# Sobe a aplicação INTEIRA (banco + backend + frontend) com um único
+# comando, cada peça no seu próprio container — para provar que o projeto
+# roda de ponta a ponta em qualquer máquina que tenha Docker, sem precisar
+# instalar Node, Postgres ou nada além disso localmente.
+#
+# Isto NÃO é configuração de deploy para nenhum provedor de nuvem (Render,
+# Railway, Fly.io etc.) — isso fica para uma fase futura. É só a
+# containerização da aplicação em si, testável na sua própria máquina.
+#
+# Uso: docker compose -f docker-compose.prod.yml up --build
+#      frontend fica em http://localhost:8080
+#      backend fica em  http://localhost:3333
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: support_desk
+    volumes:
+      - support_desk_prod_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Roda `prisma migrate deploy` UMA VEZ e encerra — não é um serviço de pé
+  # como os outros. É deliberadamente separado do container `backend`: se a
+  # migration morasse dentro do CMD da aplicação, escalar `backend` para
+  # múltiplas réplicas faria cada uma tentar migrar o banco ao mesmo tempo —
+  # uma corrida que o Prisma não foi desenhado para arbitrar sozinho.
+  # `depends_on: condition: service_completed_successfully` no `backend`
+  # garante que a aplicação só sobe depois que este job terminar com sucesso.
+  migrate:
+    build: ./backend
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/support_desk
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/support_desk
+      # Em produção de verdade, isto viria de um secret manager, nunca
+      # hardcoded num arquivo versionado — aqui é só para rodar localmente.
+      JWT_SECRET: troque-isto-por-um-segredo-forte
+      PORT: 3333
+    ports:
+      - "3333:3333"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # É o NAVEGADOR (rodando na sua máquina) que chama esta URL, não um
+        # container chamando outro — por isso é "localhost:3333" (a porta
+        # publicada do backend no host), e não "http://backend:3333" (que só
+        # funcionaria para uma chamada feita de DENTRO da rede do Docker).
+        VITE_API_URL: http://localhost:3333/api
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  support_desk_prod_data:

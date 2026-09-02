@@ -1,0 +1,118 @@
+// Consulte GUIDE.md > Fase 1 para o raciocínio por trás de cada decisão de modelagem aqui.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  AGENT
+  ADMIN
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(CUSTOMER)
+  createdAt    DateTime @default(now())
+
+  // Um usuário CUSTOMER cria tickets.
+  ticketsCreated Ticket[] @relation("TicketCustomer")
+
+  // Um usuário AGENT pode ter tickets atribuídos a ele.
+  ticketsAssigned Ticket[] @relation("TicketAgent")
+
+  messages     TicketMessage[]
+  activityLogs ActivityLog[]
+}
+
+model Ticket {
+  id          String         @id @default(uuid())
+  title       String
+  description String
+  status      TicketStatus   @default(OPEN)
+  priority    TicketPriority @default(MEDIUM)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  customerId String
+  customer   User   @relation("TicketCustomer", fields: [customerId], references: [id])
+
+  // Nulo até um agente assumir o ticket.
+  assignedAgentId String?
+  assignedAgent   User?   @relation("TicketAgent", fields: [assignedAgentId], references: [id])
+
+  messages     TicketMessage[]
+  tags         TicketTag[]
+  activityLogs ActivityLog[]
+
+  @@index([status])
+  @@index([assignedAgentId])
+}
+
+model TicketMessage {
+  id        String   @id @default(uuid())
+  body      String
+  createdAt DateTime @default(now())
+
+  ticketId String
+  ticket   Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id])
+}
+
+model Tag {
+  id   String @id @default(uuid())
+  name String @unique
+
+  tickets TicketTag[]
+}
+
+// Tabela de junção explícita (em vez de uma relação many-to-many implícita do Prisma)
+// porque assim fica fácil adicionar campos no futuro (ex: quem adicionou a tag e quando).
+model TicketTag {
+  ticketId String
+  ticket   Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  tagId String
+  tag   Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([ticketId, tagId])
+}
+
+// Registro de auditoria: cada mudança relevante em um ticket vira uma linha aqui.
+// É o que alimenta métricas como "tempo médio até a primeira resposta" na Fase 6.
+model ActivityLog {
+  id        String   @id @default(uuid())
+  action    String // ex: "STATUS_CHANGED", "ASSIGNED", "MESSAGE_ADDED"
+  metadata  Json? // dados extras, ex: { "from": "OPEN", "to": "IN_PROGRESS" }
+  createdAt DateTime @default(now())
+
+  ticketId String
+  ticket   Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+}

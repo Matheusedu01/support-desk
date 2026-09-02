@@ -1,0 +1,18 @@
+# Sobe apenas o banco de dados para desenvolvimento local. A aplicação em si
+# (backend/frontend) ainda roda direto com `npm run dev` — containerizar a
+# aplicação inteira para deploy é assunto da Fase 9 (ver GUIDE.md).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: support_desk
+    ports:
+      - "5432:5432"
+    volumes:
+      - support_desk_data:/var/lib/postgresql/data
+
+volumes:
+  support_desk_data:
