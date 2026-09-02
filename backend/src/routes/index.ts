@@ -2,6 +2,7 @@ import { Router } from "express";
 import authRoutes from "./auth.routes";
 import ticketRoutes from "./ticket.routes";
 import adminRoutes from "./admin.routes";
+import tagRoutes from "./tag.routes";
 import { authenticate } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import { prisma } from "../lib/prisma";
@@ -11,6 +12,7 @@ const router = Router();
 router.use("/auth", authRoutes);
 router.use("/tickets", ticketRoutes);
 router.use("/admin", adminRoutes);
+router.use("/tags", tagRoutes);
 
 // Rota de exemplo que exige apenas autenticação (qualquer papel).
 // Serve para o frontend confirmar quem está logado e testar o token.

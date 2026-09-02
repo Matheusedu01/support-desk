@@ -26,6 +26,23 @@ export interface TicketMessage {
   author: { id: string; name: string; role: Role };
 }
 
+export interface Tag {
+  id: string;
+  name: string;
+}
+
+// O formato de `metadata` varia por `action` (ver backend/prisma/schema.prisma
+// e o comentário em ActivityLog) — por isso é `unknown` aqui, e cada caso é
+// tratado explicitamente em `formatActivity` (components/ActivityTimeline.tsx)
+// em vez de assumir uma forma fixa.
+export interface ActivityLogEntry {
+  id: string;
+  action: "ASSIGNED" | "STATUS_CHANGED" | "MESSAGE_ADDED" | "TAG_ADDED" | "TAG_REMOVED";
+  metadata: unknown;
+  createdAt: string;
+  user: { id: string; name: string; role: Role };
+}
+
 export interface TicketSummary {
   id: string;
   title: string;
@@ -36,10 +53,12 @@ export interface TicketSummary {
   updatedAt: string;
   customer: { id: string; name: string; email: string };
   assignedAgent: { id: string; name: string } | null;
+  tags: Tag[];
 }
 
 export interface TicketDetail extends TicketSummary {
   messages: TicketMessage[];
+  activityLogs: ActivityLogEntry[];
 }
 
 export interface DashboardStats {

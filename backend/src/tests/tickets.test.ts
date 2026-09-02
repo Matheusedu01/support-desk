@@ -186,6 +186,34 @@ describe("Tickets — CRUD, visibilidade e BOLA (Fase 4)", () => {
     });
   });
 
+  it("o histórico de atividade (activityLogs) registra atribuição, mensagem e mudança de status, em ordem", async () => {
+    const customer = await createTestUser("CUSTOMER", "cliente@example.com");
+    const agent = await createTestUser("AGENT", "agente@example.com");
+
+    const createRes = await request(app)
+      .post("/api/tickets")
+      .set("Authorization", `Bearer ${customer.token}`)
+      .send(validTicketPayload);
+    const ticketId = createRes.body.ticket.id;
+
+    await request(app).post(`/api/tickets/${ticketId}/assign`).set("Authorization", `Bearer ${agent.token}`);
+    await request(app)
+      .post(`/api/tickets/${ticketId}/messages`)
+      .set("Authorization", `Bearer ${agent.token}`)
+      .send({ body: "Pode detalhar o erro?" });
+    await request(app)
+      .patch(`/api/tickets/${ticketId}/status`)
+      .set("Authorization", `Bearer ${agent.token}`)
+      .send({ status: "RESOLVED" });
+
+    const getRes = await request(app)
+      .get(`/api/tickets/${ticketId}`)
+      .set("Authorization", `Bearer ${agent.token}`);
+
+    const actions = getRes.body.ticket.activityLogs.map((entry: { action: string }) => entry.action);
+    expect(actions).toEqual(["ASSIGNED", "MESSAGE_ADDED", "STATUS_CHANGED"]);
+  });
+
   it("cliente dono e agente responsável trocam mensagens; um terceiro cliente não pode responder", async () => {
     const customer = await createTestUser("CUSTOMER", "cliente@example.com");
     const agent = await createTestUser("AGENT", "agente@example.com");

@@ -8,6 +8,8 @@ import {
   addMessage,
   assignTicket,
   updateTicketStatus,
+  addTagToTicket,
+  removeTagFromTicket,
 } from "../controllers/ticket.controller";
 
 const router = Router();
@@ -31,5 +33,9 @@ router.post("/:id/messages", asyncHandler(addMessage));
 // o ticket — só AGENT e ADMIN, nunca CUSTOMER.
 router.post("/:id/assign", authorize("AGENT", "ADMIN"), asyncHandler(assignTicket));
 router.patch("/:id/status", authorize("AGENT", "ADMIN"), asyncHandler(updateTicketStatus));
+
+// Tags são ferramenta de triagem interna — só quem atende o ticket gerencia.
+router.post("/:id/tags", authorize("AGENT", "ADMIN"), asyncHandler(addTagToTicket));
+router.delete("/:id/tags/:tagId", authorize("AGENT", "ADMIN"), asyncHandler(removeTagFromTicket));
 
 export default router;

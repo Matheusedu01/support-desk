@@ -1,6 +1,9 @@
 import { TicketPriority, TicketStatus } from "../types";
 
-const STATUS_LABEL: Record<TicketStatus, string> = {
+// Exportado porque components/ActivityTimeline.tsx também precisa traduzir
+// esses valores (na frase "mudou o status de X para Y") — melhor reaproveitar
+// o mesmo mapa do que manter duas traduções que podem divergir com o tempo.
+export const STATUS_LABEL: Record<TicketStatus, string> = {
   OPEN: "Aberto",
   IN_PROGRESS: "Em andamento",
   RESOLVED: "Resolvido",

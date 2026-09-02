@@ -61,6 +61,15 @@ export function TicketsListPage() {
                     Cliente: {ticket.customer.name}
                     {ticket.assignedAgent && ` · Agente: ${ticket.assignedAgent.name}`}
                   </span>
+                  {ticket.tags.length > 0 && (
+                    <span className="ticket-row-tags">
+                      {ticket.tags.map((tag) => (
+                        <span key={tag.id} className="tag-chip tag-chip-readonly">
+                          {tag.name}
+                        </span>
+                      ))}
+                    </span>
+                  )}
                 </div>
                 <div className="ticket-row-badges">
                   <PriorityBadge priority={ticket.priority} />

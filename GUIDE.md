@@ -16,6 +16,7 @@ O projeto: um sistema de tickets de suporte com 3 papéis (cliente, agente, admi
 - [x] **Fase 7** — Frontend (React + TypeScript)
 - [x] **Fase 8** — Testes automatizados
 - [x] **Fase 9** — Containerização com Docker (deploy em nuvem fica para uma fase futura, por decisão deliberada — ver seção da Fase 9)
+- [x] **Fase 10** — Tags e histórico de atividade (o projeto já publicado, evoluído com uma melhoria concreta)
 
 Cada fase abaixo detalha as decisões da fase já feita.
 
@@ -358,6 +359,33 @@ Isso prova que a aplicação inteira roda de ponta a ponta fora do ambiente de d
 
 ### Limitação conhecida desta sessão
 Não há Docker instalado nesta máquina, então **não foi possível testar o build das imagens nem subir os containers de verdade**. Os `Dockerfile`s e o `docker-compose.prod.yml` foram revisados com cuidado e o YAML foi validado sintaticamente, mas o primeiro teste real — `docker compose -f docker-compose.prod.yml up --build` — ainda precisa ser feito na sua máquina (ou em qualquer uma com Docker) antes de considerar esta fase 100% confirmada.
+
+---
+
+## Fase 10 — Tags e histórico de atividade
+
+### Contexto: por que essa fase existe
+As Fases 0-9 deixaram o projeto publicado e funcional. Ao revisar o que ficou "pela metade", dois pontos chamaram atenção: o schema do banco (Fase 1) já modelava `Tag`/`TicketTag` desde o início, mas nenhuma rota ou tela jamais usava isso; e `ActivityLog` (Fase 4) registrava toda ação relevante desde o começo, mas só era consumido pelas métricas agregadas do admin (Fase 6) — nunca virava uma timeline visível num ticket individual. Esta fase termina os dois.
+
+### O que foi feito
+- **Tags**: `POST /api/tickets/:id/tags` (cria a tag se não existir, e a anexa ao ticket), `DELETE /api/tickets/:id/tags/:tagId` (remove a associação), `GET /api/tags` (lista todas as tags já criadas, para sugestão). Restritas a `AGENT`/`ADMIN`.
+- **Histórico de atividade**: `GET /api/tickets/:id` agora inclui `activityLogs`, e o frontend renderiza isso como uma timeline (`<details>` recolhível) na tela de detalhe, com cada evento traduzido para uma frase em português.
+- 7 testes novos (`tags.test.ts` + 1 caso em `tickets.test.ts` para a timeline), todos rodando contra Postgres real: 29 no total.
+
+### Por que a checagem de acesso de tags reusa `canAccessTicket` (a mais permissiva), não a mais restrita de `assignTicket`
+Isso é uma decisão deliberada, documentada como comentário no código (`ticket.controller.ts`): um agente pode querer rotular um ticket ainda na fila — "bug", "urgente" — antes mesmo de decidir se vai reivindicá-lo para si, para ajudar a triagem de todo mundo. Se a regra fosse "só o agente responsável pode gerenciar tags" (a mesma de `updateTicketStatus`), um ticket sem dono nunca poderia ser rotulado por ninguém. Reusar `canAccessTicket` aqui, em vez de inventar uma terceira variação, é o que mantém a matriz de permissões do projeto pequena e fácil de explicar: "ver" é uma regra, "agir sobre o ciclo de vida" (assign/status) é outra mais restrita, e "colaborar em triagem" (tags) é a mesma regra de "ver".
+
+### Por que adicionar a mesma tag duas vezes não dá erro (upsert, não create)
+`POST /tickets/:id/tags` upserta tanto a `Tag` (por nome único) quanto a linha de junção `TicketTag` (pela chave composta `ticketId_tagId`). Do ponto de vista de quem chama a API — inclusive o próprio frontend, que só sabe "o usuário digitou um nome e apertou Enter" — isso deveria ser uma operação idempotente: pedir para adicionar uma tag que já está lá não é um erro, é um "sim, já está" silencioso. Modelar isso como `create` faria a segunda tentativa estourar uma violação de chave única, que o frontend teria que capturar e ignorar — mais complexidade nos dois lados para o mesmo resultado.
+
+### Por que o nome do agente é gravado dentro do `metadata` do evento `ASSIGNED` (denormalização deliberada)
+Até a Fase 10, `metadata: { agentId }` bastava, porque nada exibia essa informação para humanos. Agora que existe uma timeline visível, `agentId` sozinho obrigaria uma consulta extra (buscar o nome atual do usuário) só para renderizar uma frase. Mas o motivo mais importante não é performance, é correção de auditoria: um log de atividade deveria congelar o que aconteceu **no momento do evento** — se o agente mudar de nome depois, a entrada antiga da timeline não deveria mudar retroativamente junto (isso seria reescrever história). Por isso `metadata` agora grava `{ agentId, agentName }` explicitamente, como um snapshot, em vez de depender de um JOIN ao vivo com a tabela `User` (que é exatamente o que os campos `customer`/`assignedAgent` do próprio ticket fazem — esses sim devem sempre refletir o estado atual, porque respondem "quem é hoje", não "quem era quando").
+
+### Por que `metadata` no frontend é `unknown`, não um tipo fixo por `action`
+`ActivityLogEntry.metadata` está tipado como `unknown` em `types.ts`, e `formatActivity` (em `ActivityTimeline.tsx`) faz um cast explícito e local dentro de cada `case` do `switch`, checando os campos com `?.` antes de usar. A alternativa óbvia — um tipo `union` fortemente tipado por `action` — seria mais "correta" no papel, mas exigiria manter essa união sincronizada manualmente com o que o backend realmente grava em cada `activityLog.create(...)`, espalhado em três controllers diferentes. Como não há geração automática de tipos entre backend e frontend neste projeto (limitação já registrada na Fase 7), um `unknown` com validação defensiva por `case` é mais honesto sobre a garantia real que existe: se o formato mudar num controller e alguém esquecer de atualizar aqui, a tela cai num fallback genérico em vez de quebrar com `undefined.algumCampo`.
+
+### Para que serve
+Isso fecha um "loose end" que só quem olhasse o schema do banco com atenção notaria — e é exatamente esse tipo de acabamento que separa um projeto de portfólio "funcional" de um "completo". Tags dão contexto de triagem que a listagem sozinha não dava; a timeline responde, para qualquer pessoa olhando um ticket, "o que já aconteceu aqui" sem precisar perguntar a ninguém.
 
 ---
 

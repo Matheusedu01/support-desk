@@ -4,6 +4,8 @@ import { apiFetch, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { TicketDetail, TicketStatus } from "../types";
 import { StatusBadge, PriorityBadge } from "../components/Badges";
+import { TagManager } from "../components/TagManager";
+import { ActivityTimeline } from "../components/ActivityTimeline";
 
 export function TicketDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -61,6 +63,8 @@ export function TicketDetailPage() {
 
       <p className="ticket-description">{ticket.description}</p>
 
+      <TagManager ticketId={ticket.id} tags={ticket.tags} canManage={canManage} onChanged={loadTicket} />
+
       {canManage && (
         <div className="card ticket-actions">
           <span>
@@ -96,6 +100,8 @@ export function TicketDetailPage() {
       </ul>
 
       <NewMessageForm ticketId={ticket.id} onSent={loadTicket} />
+
+      <ActivityTimeline entries={ticket.activityLogs} />
     </div>
   );
 }

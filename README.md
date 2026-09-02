@@ -16,6 +16,8 @@ Sistema de tickets de suporte com três papéis (cliente, agente, administrador)
 |---|---|
 | ![Detalhe do ticket](docs/screenshots/04-ticket-detail-agent.png) | ![Métricas do admin](docs/screenshots/05-admin-stats.png) |
 
+![Tags e histórico de atividade](docs/screenshots/06-ticket-tags-history.png)
+
 ## Stack
 
 - **Backend**: Node.js, TypeScript, Express, Prisma ORM, PostgreSQL, JWT
@@ -25,12 +27,13 @@ Sistema de tickets de suporte com três papéis (cliente, agente, administrador)
 
 - **RBAC + autorização por objeto**: papel certo não é suficiente — cada ticket é checado individualmente contra quem está pedindo (proteção contra [BOLA](https://owasp.org/API-Security/editions/2023/en/0x11-t10/), a vulnerabilidade nº1 do OWASP API Security Top 10).
 - **Métricas via SQL agregado**: tempo médio até primeira resposta e até resolução, calculados com subquery correlacionada direto no Postgres (`$queryRaw`), sem trazer dado bruto para a aplicação.
-- **22 testes automatizados** (Vitest + Supertest) rodando em CI a cada push — unitários e de integração contra Postgres real.
+- **Tags + histórico de atividade**: cada ticket pode ser rotulado (com upsert idempotente) e tem uma timeline traduzida de tudo que já aconteceu — atribuição, mudança de status, mensagens, tags — construída em cima de um log de auditoria que já existia desde a modelagem inicial.
+- **29 testes automatizados** (Vitest + Supertest) rodando em CI a cada push — unitários e de integração contra Postgres real.
 - **Containerizado**: Dockerfiles multi-stage para backend e frontend, com migration do banco como job separado (evita corrida entre réplicas).
 
 ## Status
 
-Completo e testado de ponta a ponta com PostgreSQL real: API, os 22 testes automatizados, e a UI no navegador (login, fila de tickets, métricas do admin). Deploy em nuvem é o único item ainda não feito, por decisão deliberada. Progresso detalhado no [GUIDE.md](./GUIDE.md#roadmap-o-que-vamos-construir-em-ordem).
+Completo e testado de ponta a ponta com PostgreSQL real: API, os 29 testes automatizados, e a UI no navegador (login, fila de tickets, tags, histórico de atividade, métricas do admin). Deploy em nuvem é o único item ainda não feito, por decisão deliberada. Progresso detalhado no [GUIDE.md](./GUIDE.md#roadmap-o-que-vamos-construir-em-ordem).
 
 ## Rodando localmente
 

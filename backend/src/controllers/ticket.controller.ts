@@ -27,10 +27,32 @@ const statusSchema = z.object({
   status: z.nativeEnum(TicketStatus),
 });
 
+const tagNameSchema = z.object({
+  name: z.string().trim().min(1).max(40),
+});
+
 const ticketListInclude = {
   customer: { select: { id: true, name: true, email: true } },
   assignedAgent: { select: { id: true, name: true } },
+  // TicketTag é uma tabela de junção (ver Fase 1) — o cliente da API não
+  // precisa saber disso, só quer a lista de tags. `serializeTicket` achata
+  // isso antes de responder.
+  tags: { select: { tag: { select: { id: true, name: true } } } },
 } satisfies Prisma.TicketInclude;
+
+type TicketWithTags = { tags: { tag: { id: string; name: string } }[] };
+
+/**
+ * Achata `ticket.tags` de `[{ tag: { id, name } }]` (o formato que a tabela
+ * de junção TicketTag obriga) para `[{ id, name }]` — o formato que o
+ * frontend realmente quer consumir. Quem chama a API não precisa saber que
+ * existe uma tabela de junção por baixo; isso é detalhe de modelagem, não
+ * de contrato de API.
+ */
+function serializeTicket<T extends TicketWithTags>(ticket: T) {
+  const { tags, ...rest } = ticket;
+  return { ...rest, tags: tags.map((t) => t.tag) };
+}
 
 export async function createTicket(req: Request, res: Response) {
   const parsed = createTicketSchema.safeParse(req.body);
@@ -89,7 +111,7 @@ export async function listTickets(req: Request, res: Response) {
     orderBy: { createdAt: "desc" },
   });
 
-  return res.json({ tickets });
+  return res.json({ tickets: tickets.map(serializeTicket) });
 }
 
 export async function getTicket(req: Request, res: Response) {
@@ -100,6 +122,14 @@ export async function getTicket(req: Request, res: Response) {
       messages: {
         orderBy: { createdAt: "asc" },
         include: { author: { select: { id: true, name: true, role: true } } },
+      },
+      // Timeline de auditoria (ver Fase 1 e o adendo da Fase 4): exibida na
+      // tela de detalhe para dar contexto de tudo que já aconteceu com o
+      // ticket, não só a conversa. Ordenada junto com as mensagens, do mais
+      // antigo para o mais novo.
+      activityLogs: {
+        orderBy: { createdAt: "asc" },
+        include: { user: { select: { id: true, name: true, role: true } } },
       },
     },
   });
@@ -112,7 +142,7 @@ export async function getTicket(req: Request, res: Response) {
     return res.status(403).json({ error: "Você não tem acesso a este ticket." });
   }
 
-  return res.json({ ticket });
+  return res.json({ ticket: serializeTicket(ticket) });
 }
 
 export async function addMessage(req: Request, res: Response) {
@@ -172,6 +202,7 @@ export async function assignTicket(req: Request, res: Response) {
 
   const { role, id: userId } = req.user!;
   let targetAgentId: string;
+  let targetAgentName: string;
 
   if (role === "ADMIN") {
     if (!parsed.data.agentId) {
@@ -184,6 +215,7 @@ export async function assignTicket(req: Request, res: Response) {
     }
 
     targetAgentId = agent.id;
+    targetAgentName = agent.name;
   } else {
     // role === "AGENT" (garantido pelo authorize() na rota)
     if (ticket.assignedAgentId && ticket.assignedAgentId !== userId) {
@@ -191,6 +223,11 @@ export async function assignTicket(req: Request, res: Response) {
     }
 
     targetAgentId = userId;
+    // O JWT só carrega id + role (ver Fase 2) — o nome não está no token,
+    // então precisa dessa consulta extra só para deixar o log de auditoria
+    // legível (ver o porquê de denormalizar o nome logo abaixo).
+    const currentAgent = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    targetAgentName = currentAgent.name;
   }
 
   const updated = await prisma.$transaction(async (tx) => {
@@ -204,12 +241,18 @@ export async function assignTicket(req: Request, res: Response) {
       },
     });
 
+    // O nome do agente vai gravado no log (não só o id) de propósito: é um
+    // registro de AUDITORIA — deve refletir o que aconteceu no momento do
+    // evento. Se o agente mudar de nome depois, a entrada da timeline não
+    // deveria mudar retroativamente junto; isso é diferente dos dados "ao
+    // vivo" do ticket (customer, assignedAgent), que sempre mostram o estado
+    // atual porque vêm de um JOIN, não de um snapshot.
     await tx.activityLog.create({
       data: {
         ticketId: ticket.id,
         userId,
         action: "ASSIGNED",
-        metadata: { agentId: targetAgentId },
+        metadata: { agentId: targetAgentId, agentName: targetAgentName },
       },
     });
 
@@ -217,6 +260,94 @@ export async function assignTicket(req: Request, res: Response) {
   });
 
   return res.json({ ticket: updated });
+}
+
+/**
+ * Adiciona uma tag a um ticket, criando a tag se ainda não existir (nome é
+ * único — ver Fase 1). Restrita a AGENT/ADMIN: tags são uma ferramenta de
+ * triagem interna, não algo que o cliente que abriu o ticket controla.
+ *
+ * Usa a checagem mais permissiva (`canAccessTicket`, a mesma de "posso
+ * ver"), não a mais restrita de `assignTicket`/`updateTicketStatus` — faz
+ * sentido um agente rotular um ticket ainda na fila (ex: "bug", "urgente")
+ * antes mesmo de reivindicá-lo para si, para ajudar a triagem de todos.
+ */
+export async function addTagToTicket(req: Request, res: Response) {
+  const parsed = tagNameSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Nome de tag inválido." });
+  }
+
+  const ticket = await prisma.ticket.findUnique({ where: { id: req.params.id } });
+  if (!ticket) {
+    return res.status(404).json({ error: "Ticket não encontrado." });
+  }
+
+  if (!canAccessTicket(req.user!, ticket)) {
+    return res.status(403).json({ error: "Você não tem acesso a este ticket." });
+  }
+
+  const tag = await prisma.$transaction(async (tx) => {
+    const upsertedTag = await tx.tag.upsert({
+      where: { name: parsed.data.name },
+      update: {},
+      create: { name: parsed.data.name },
+    });
+
+    // upsert (não create) na junção também: adicionar uma tag que já está
+    // no ticket deve ser um "sim, já está" silencioso, não um erro de
+    // duplicidade — a ação é idempotente do ponto de vista de quem chama.
+    await tx.ticketTag.upsert({
+      where: { ticketId_tagId: { ticketId: ticket.id, tagId: upsertedTag.id } },
+      update: {},
+      create: { ticketId: ticket.id, tagId: upsertedTag.id },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        ticketId: ticket.id,
+        userId: req.user!.id,
+        action: "TAG_ADDED",
+        metadata: { tagName: upsertedTag.name },
+      },
+    });
+
+    return upsertedTag;
+  });
+
+  return res.status(201).json({ tag });
+}
+
+export async function removeTagFromTicket(req: Request, res: Response) {
+  const ticket = await prisma.ticket.findUnique({ where: { id: req.params.id } });
+  if (!ticket) {
+    return res.status(404).json({ error: "Ticket não encontrado." });
+  }
+
+  if (!canAccessTicket(req.user!, ticket)) {
+    return res.status(403).json({ error: "Você não tem acesso a este ticket." });
+  }
+
+  const tag = await prisma.tag.findUnique({ where: { id: req.params.tagId } });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.ticketTag.deleteMany({
+      where: { ticketId: ticket.id, tagId: req.params.tagId },
+    });
+
+    if (tag) {
+      await tx.activityLog.create({
+        data: {
+          ticketId: ticket.id,
+          userId: req.user!.id,
+          action: "TAG_REMOVED",
+          metadata: { tagName: tag.name },
+        },
+      });
+    }
+  });
+
+  return res.status(204).send();
 }
 
 /**
